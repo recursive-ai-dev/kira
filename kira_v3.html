@@ -2034,7 +2034,7 @@ function sendMessage(){
   logTransition(correlationId,'feedback_analyzed',startedAt,{signal,regex_mood:regexMoodNow});
 
   msgInput.value='';msgInput.style.height='auto';updateSendBtn();
-  addMessage('you',text);state.messagesSent++;state.lastMessageTime=ENV.nowMs();
+  addMessage('you',text,true);state.messagesSent++;state.lastMessageTime=ENV.nowMs();
   logTransition(correlationId,'user_message_persisted',startedAt,{messages_sent:state.messagesSent});
 
   _seed=(ENV.nowMs()^(state.messagesSent*2654435761))>>>0;rng=mulberry32(_seed);
