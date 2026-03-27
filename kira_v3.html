@@ -15,7 +15,9 @@
   --accent-rose:#e8758a;--accent-rose-soft:#c06878;--accent-warm:#d4956a;
   --accent-blush:#f0a0b0;--accent-glow:rgba(232,117,138,0.15);
   --border-subtle:rgba(155,143,176,0.08);--shadow-soft:0 2px 20px rgba(0,0,0,0.3);
-  --radius-sm:8px;--radius-md:16px;--radius-lg:24px;--radius-bubble:20px
+  --radius-sm:8px;--radius-md:16px;--radius-lg:24px;--radius-bubble:20px;
+  --glass:rgba(255,255,255,0.04);--glow-strong:rgba(232,117,138,0.32);
+  --header-grad:linear-gradient(180deg,var(--bg-surface) 0%,rgba(23,21,38,0.7) 70%,transparent 100%)
 }
 html,body{height:100%;overflow:hidden;background:var(--bg-deep);color:var(--text-primary);
   font-family:'Nunito',sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
@@ -26,8 +28,8 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
 @keyframes ambientDrift{0%{transform:translate(0,0) rotate(0deg)}100%{transform:translate(-3%,2%) rotate(2deg)}}
 #app{position:relative;z-index:1;display:flex;flex-direction:column;height:100%;max-width:520px;margin:0 auto}
 #header{display:flex;align-items:center;gap:14px;padding:16px 20px;
-  background:linear-gradient(180deg,var(--bg-surface) 0%,transparent 100%);
-  border-bottom:1px solid var(--border-subtle);flex-shrink:0;position:relative;z-index:10}
+  background:var(--header-grad);
+  border-bottom:1px solid var(--border-subtle);flex-shrink:0;position:relative;z-index:10;backdrop-filter:blur(14px)}
 #avatar-ring{position:relative;width:48px;height:48px;border-radius:50%;
   background:linear-gradient(135deg,var(--accent-rose),var(--accent-warm));padding:2px;flex-shrink:0}
 #avatar{width:100%;height:100%;border-radius:50%;background:var(--bg-elevated);
@@ -190,6 +192,28 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
   font-size:10px;color:var(--text-muted);font-family:'Quicksand',sans-serif;
   font-weight:600;letter-spacing:0.3px;margin-left:auto;transition:all 0.4s}
 #context-pill.active{display:flex;color:var(--accent-warm)}
+#header-actions{display:flex;align-items:center;gap:6px}
+.icon-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:8px;border-radius:50%;transition:all 0.2s;font-size:18px}
+.icon-btn:hover{color:var(--accent-rose);background:var(--accent-glow)}
+#theme-btn{font-size:17px}
+#insight-dock{margin:10px 14px 0;padding:12px;border:1px solid var(--border-subtle);border-radius:14px;
+  background:linear-gradient(135deg,var(--glass),rgba(255,255,255,0.02));display:flex;flex-direction:column;gap:10px}
+#insight-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.insight-card{padding:8px;border-radius:10px;background:rgba(0,0,0,0.18);border:1px solid var(--border-subtle)}
+.insight-label{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);font-family:'Quicksand',sans-serif;font-weight:700}
+.insight-value{font-size:12px;color:var(--text-primary);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#quick-actions{display:flex;gap:8px;flex-wrap:wrap}
+.quick-chip{padding:6px 10px;border-radius:999px;border:1px solid rgba(232,117,138,0.25);background:rgba(232,117,138,0.08);color:var(--accent-blush);font-size:11px;cursor:pointer;font-family:'Quicksand',sans-serif;font-weight:700;transition:all .2s}
+.quick-chip:hover{transform:translateY(-1px);background:rgba(232,117,138,0.18)}
+body.theme-aurora{
+  --bg-deep:#070b1d;--bg-surface:#111936;--bg-elevated:#172449;
+  --bg-chat-her:#1a2f57;--bg-chat-you:#2b315e;--text-primary:#eaf1ff;--text-secondary:#c0cde8;
+  --text-muted:#8ea2c7;--accent-rose:#6bc5ff;--accent-rose-soft:#4ca9e8;--accent-warm:#86e6c4;
+  --accent-blush:#a7e3ff;--accent-glow:rgba(107,197,255,0.16);--glow-strong:rgba(107,197,255,0.3);
+  --header-grad:linear-gradient(180deg,#111936 0%,rgba(17,25,54,0.76) 70%,transparent 100%)
+}
+@media(max-width:520px){#insight-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
 </style>
 </head>
 <body>
@@ -199,7 +223,23 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
     <div id="header-info"><div id="header-name">Kira</div><div id="header-status">online</div></div>
     <div id="neural-badge" title="Neural engine active"><div id="neural-pulse"></div><span>neural</span></div>
     <div id="context-pill" title="Current conversation context"></div>
-    <button id="settings-btn" title="Settings">⚙</button>
+    <div id="header-actions">
+      <button id="theme-btn" class="icon-btn" title="Toggle aura mode">✦</button>
+      <button id="settings-btn" class="icon-btn" title="Settings">⚙</button>
+    </div>
+  </div>
+  <div id="insight-dock">
+    <div id="insight-stats">
+      <div class="insight-card"><div class="insight-label">Her Mood</div><div class="insight-value" id="insight-mood">neutral</div></div>
+      <div class="insight-card"><div class="insight-label">Energy</div><div class="insight-value" id="insight-energy">70%</div></div>
+      <div class="insight-card"><div class="insight-label">Bond</div><div class="insight-value" id="insight-stage">Stranger</div></div>
+      <div class="insight-card"><div class="insight-label">Streak</div><div class="insight-value" id="insight-streak">0 days</div></div>
+    </div>
+    <div id="quick-actions">
+      <button class="quick-chip" data-prompt="Tell me something unexpectedly sweet.">Sweet Prompt</button>
+      <button class="quick-chip" data-prompt="Ask me one deep question.">Deep Question</button>
+      <button class="quick-chip" data-prompt="Give me a tiny challenge for today.">Mini Challenge</button>
+    </div>
   </div>
   <div id="chat-area"></div>
   <div id="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
@@ -703,7 +743,7 @@ function handleContinuation(text,userMood){
 // ─────────────────────────────────────────────────────────────────────
 //  §9  PRNG + TIME + STORAGE
 // ─────────────────────────────────────────────────────────────────────
-const STORE_KEY='kira_state_v3',AI_KEY='kira_ai_v3',IMG_KEY='kira_images_v3',PIC_KEY='kira_profilepic_v3';
+const STORE_KEY='kira_state_v3',AI_KEY='kira_ai_v3',IMG_KEY='kira_images_v3',PIC_KEY='kira_profilepic_v3',THEME_KEY='kira_theme_v1';
 const INPUT_SOFT_LIMIT=300;
 
 // ── Image store: images are kept out of DOM innerHTML entirely ──
@@ -917,6 +957,7 @@ function addAffection(n){
   state.affection=Math.max(0,Math.min(1000,state.affection+n));
   if(getStage().name!==prev)setTimeout(()=>addSystemMessage('Something shifted between you two... ✧'),500);
   updateAffectionUI();
+  updateInsightDock();
 }
 
 function updateAffectionUI(){
@@ -965,6 +1006,7 @@ function updateHerMood(userMood){
   if(tod==='late_night')state.energy=Math.max(0.2,state.energy-0.05);
   else if(tod==='morning')state.energy=0.9;
   else state.energy=Math.min(1,state.energy+0.02);
+  updateInsightDock();
 }
 
 function detectFeedback(text){
@@ -2134,6 +2176,32 @@ const affectionFill=document.getElementById('affection-fill');
 const affectionStage=document.getElementById('affection-stage');
 const personalityChips=document.getElementById('personality-chips');
 const aiStats=document.getElementById('ai-stats');
+const themeBtn=document.getElementById('theme-btn');
+const insightMood=document.getElementById('insight-mood');
+const insightEnergy=document.getElementById('insight-energy');
+const insightStage=document.getElementById('insight-stage');
+const insightStreak=document.getElementById('insight-streak');
+
+function applyTheme(mode){
+  const aurora=mode==='aurora';
+  document.body.classList.toggle('theme-aurora',aurora);
+  themeBtn.textContent=aurora?'☾':'✦';
+  themeBtn.title=aurora?'Switch to rose mode':'Switch to aurora mode';
+  try{localStorage.setItem(THEME_KEY,aurora?'aurora':'rose');}catch(e){}
+}
+
+function loadTheme(){
+  let mode='rose';
+  try{mode=localStorage.getItem(THEME_KEY)||'rose';}catch(e){}
+  applyTheme(mode);
+}
+
+function updateInsightDock(){
+  if(insightMood)insightMood.textContent=(state.mood||'neutral');
+  if(insightEnergy)insightEnergy.textContent=`${Math.round((state.energy||0)*100)}%`;
+  if(insightStage)insightStage.textContent=getStage().name;
+  if(insightStreak)insightStreak.textContent=`${state.currentStreak||0} day${(state.currentStreak||0)===1?'':'s'}`;
+}
 
 function renderAIStats(){
   const totalParams=VOCAB*EDIM*3+EDIM*32+32+32*N_MOODS+N_MOODS+EDIM*EDIM;
@@ -2184,6 +2252,22 @@ resetBtn.addEventListener('click',()=>{
 });
 settingsOverlay.addEventListener('click',(e)=>{if(e.target===settingsOverlay)settingsOverlay.classList.remove('open');});
 
+themeBtn.addEventListener('click',()=>{
+  const next=document.body.classList.contains('theme-aurora')?'rose':'aurora';
+  applyTheme(next);
+});
+
+document.querySelectorAll('.quick-chip').forEach((chip)=>{
+  chip.addEventListener('click',()=>{
+    const prompt=chip.getAttribute('data-prompt')||'';
+    msgInput.value=prompt;
+    msgInput.focus();
+    msgInput.style.height='auto';
+    msgInput.style.height=Math.min(msgInput.scrollHeight,120)+'px';
+    updateSendBtn();
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────
 //  §22  BOOT
 // ─────────────────────────────────────────────────────────────────────
@@ -2213,7 +2297,8 @@ function boot(){
       persistAtomically('boot_initial_message');
     },randInt(800,1500));
   },delay);
-  updateAffectionUI();updateSendBtn();msgInput.focus();
+  loadTheme();
+  updateAffectionUI();updateSendBtn();updateInsightDock();msgInput.focus();
 }
 
 boot();
