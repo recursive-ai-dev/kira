@@ -868,6 +868,10 @@ function recoverIncompleteTx(){
   try{
     const pending=localStorage.getItem(TX_KEY);
     if(!pending)return;
+    // NOTE: This clears the interrupted transaction marker but does NOT
+    // restore state consistency. If state was written but AI was not,
+    // the system proceeds with potentially misaligned data.
+    // True recovery would require storing a pre-transaction backup.
     trace('transition',{correlation_id:ENV.makeId('recover'),step_name:'recover_incomplete_tx',latency_ms:0,pending_tx:pending},'warn');
     localStorage.removeItem(TX_KEY);
   }catch(err){
