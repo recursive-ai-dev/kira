@@ -280,6 +280,7 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
 // ══════════════════════════════════════════════════════════════════════
 (function(){
 'use strict';
+var rng=Math.random;
 
 // ─────────────────────────────────────────────────────────────────────
 //  §1  MATRIX KERNEL  ·  typed Float32Array operations
@@ -291,7 +292,7 @@ const M={
   randn:(n,scale=0.1)=>{
     const d=new Float32Array(n);
     for(let i=0;i<n;i+=2){
-      const u1=Math.random()+1e-10,u2=Math.random();
+      const u1=rng()+1e-10,u2=rng();
       const r=scale*Math.sqrt(-2*Math.log(u1));
       d[i]=r*Math.cos(2*Math.PI*u2);
       if(i+1<n)d[i+1]=r*Math.sin(2*Math.PI*u2);
@@ -578,7 +579,7 @@ class KiraAI{
   // Temperature-weighted sampling from top-K ranked candidates
   rank(candidates,ctxVec){
     if(!candidates||!candidates.length)return'';
-    if(!ctxVec)return candidates[Math.floor(Math.random()*candidates.length)];
+    if(!ctxVec)return candidates[Math.floor(rng()*candidates.length)];
     const scored=candidates.map(text=>{
       const rv=this.respEnc.fwd(text);
       const bilin=this.scorer.score(ctxVec,rv);
@@ -590,7 +591,7 @@ class KiraAI{
     const K=Math.min(3,scored.length),T=0.65;
     const top=scored.slice(0,K);const ms=top[0].score;
     let sum=0;const w=top.map(c=>{const e=Math.exp((c.score-ms)/T);sum+=e;return e;});
-    let r=Math.random()*sum,chosen=top[0];
+    let r=rng()*sum,chosen=top[0];
     for(let i=0;i<top.length;i++){r-=w[i];if(r<=0){chosen=top[i];break;}}
     this._lastRVec=chosen.rv;
     return chosen.text;
@@ -638,13 +639,22 @@ const DIAG={
 
 function trace(step,data,level='info'){
   if(!DIAG.traceEnabled&&level!=='error')return;
-  DIAG.traces.push({ts:Date.now(),step,level,data});
+  DIAG.traces.push({ts:ENV.nowMs(),step,level,data});
   if(DIAG.traces.length>40)DIAG.traces.shift();
 }
 
 function setRoute(route){
   DIAG.lastRoute=route;
   trace('route',route);
+}
+
+function logTransition(correlationId,stepName,startedAt,extra={},level='info'){
+  trace('transition',{
+    correlation_id:correlationId,
+    step_name:stepName,
+    latency_ms:Math.max(0,ENV.nowMs()-startedAt),
+    ...extra
+  },level);
 }
 
 function summarizeTrace(){
@@ -715,7 +725,7 @@ function _saveImages(){
 }
 
 function storeImage(dataURL){
-  const id='img_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+  const id=ENV.makeId('img');
   _imgCache[id]=dataURL;_saveImages();return id;
 }
 
@@ -776,13 +786,31 @@ function mulberry32(a){return function(){
   t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;
 };}
 
-let _seed=Date.now(),rng=mulberry32(_seed);
+function parseSeed(){
+  const raw=new URLSearchParams(location.search).get('seed');
+  if(raw===null)return Date.now()>>>0;
+  const parsed=Number(raw);
+  return Number.isFinite(parsed)?(parsed>>>0):(Date.now()>>>0);
+}
+
+const ENV={
+  seed:parseSeed(),
+  clockOffsetMs:0,
+  nowMs(){return Date.now()+this.clockOffsetMs;},
+  nowDate(){return new Date(this.nowMs());},
+  makeId(prefix='cid'){
+    const x=Math.floor(rng()*0xFFFFFFFF).toString(16).padStart(8,'0');
+    return `${prefix}-${this.nowMs()}-${x}`;
+  }
+};
+
+let _seed=ENV.seed;rng=mulberry32(_seed);
 function pick(arr){return arr[Math.floor(rng()*arr.length)];}
 function chance(p){return rng()<p;}
 function randInt(a,b){return Math.floor(rng()*(b-a+1))+a;}
 
 function getTimeOfDay(){
-  const h=new Date().getHours();
+  const h=ENV.nowDate().getHours();
   if(h>=5&&h<9)return'early_morning';if(h>=9&&h<12)return'morning';
   if(h>=12&&h<14)return'midday';if(h>=14&&h<17)return'afternoon';
   if(h>=17&&h<20)return'evening';if(h>=20&&h<23)return'night';
@@ -790,12 +818,12 @@ function getTimeOfDay(){
 }
 
 function getDateLabel(ts){
-  const d=new Date(ts),now=new Date(),diff=Math.floor((now-d)/86400000);
+  const d=new Date(ts),now=ENV.nowDate(),diff=Math.floor((now-d)/86400000);
   if(diff===0)return'Today';if(diff===1)return'Yesterday';
   return d.toLocaleDateString([],{weekday:'long',month:'short',day:'numeric'});
 }
 
-function minutesSince(ts){return ts?Math.floor((Date.now()-ts)/60000):99999;}
+function minutesSince(ts){return ts?Math.floor((ENV.nowMs()-ts)/60000):99999;}
 
 // ─────────────────────────────────────────────────────────────────────
 //  §10  STATE ENGINE
@@ -808,17 +836,58 @@ const DEFAULT_STATE={
   conversationDepth:0,chatHistory:[],flags:{}
 };
 let state={};
+const TX_KEY='kira_tx_v1';
+
+function snapshotState(){
+  const copy=JSON.parse(JSON.stringify(state));
+  if(copy.chatHistory.length>200)copy.chatHistory=copy.chatHistory.slice(-200);
+  if(copy.memories.length>60)copy.memories=copy.memories.slice(-60);
+  if(copy.userMoods.length>10)copy.userMoods=copy.userMoods.slice(-10);
+  return copy;
+}
+
+function persistAtomically(reason='unspecified'){
+  const txId=ENV.makeId('tx');
+  const startedAt=ENV.nowMs();
+  try{
+    const stateSnapshot=snapshotState();
+    const aiSnapshot=kiraAI.save();
+    localStorage.setItem(TX_KEY,JSON.stringify({txId,reason,started_at:startedAt}));
+    localStorage.setItem(STORE_KEY,JSON.stringify(stateSnapshot));
+    localStorage.setItem(AI_KEY,JSON.stringify(aiSnapshot));
+    localStorage.removeItem(TX_KEY);
+    trace('transition',{correlation_id:txId,step_name:'persist_atomically',latency_ms:ENV.nowMs()-startedAt,reason});
+    return true;
+  }catch(err){
+    trace('transition',{correlation_id:txId,step_name:'persist_atomically',latency_ms:ENV.nowMs()-startedAt,reason,error:String(err&&err.message||err)},'error');
+    return false;
+  }
+}
+
+function recoverIncompleteTx(){
+  try{
+    const pending=localStorage.getItem(TX_KEY);
+    if(!pending)return;
+    // NOTE: This clears the interrupted transaction marker but does NOT
+    // restore state consistency. If state was written but AI was not,
+    // the system proceeds with potentially misaligned data.
+    // True recovery would require storing a pre-transaction backup.
+    trace('transition',{correlation_id:ENV.makeId('recover'),step_name:'recover_incomplete_tx',latency_ms:0,pending_tx:pending},'warn');
+    localStorage.removeItem(TX_KEY);
+  }catch(err){
+    trace('transition',{correlation_id:ENV.makeId('recover'),step_name:'recover_incomplete_tx',latency_ms:0,error:String(err&&err.message||err)},'error');
+  }
+}
 
 function loadState(){
   try{
     const raw=localStorage.getItem(STORE_KEY);
-    state=raw?{...DEFAULT_STATE,...JSON.parse(raw)}:{...DEFAULT_STATE,firstMeet:Date.now()};
-  }catch(e){state={...DEFAULT_STATE,firstMeet:Date.now()};}
+    state=raw?{...DEFAULT_STATE,...JSON.parse(raw)}:{...DEFAULT_STATE,firstMeet:ENV.nowMs()};
+  }catch(e){state={...DEFAULT_STATE,firstMeet:ENV.nowMs()};}
 }
 
 function saveState(){
-  if(state.chatHistory.length>200)state.chatHistory=state.chatHistory.slice(-200);
-  localStorage.setItem(STORE_KEY,JSON.stringify(state));
+  persistAtomically('save_state');
 }
 
 function loadAI(){
@@ -826,7 +895,7 @@ function loadAI(){
 }
 
 function saveAI(){
-  try{localStorage.setItem(AI_KEY,JSON.stringify(kiraAI.save()));}catch(e){}
+  persistAtomically('save_ai');
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -940,7 +1009,7 @@ function detectTopics(text){
 }
 
 function addMemory(text,type='general'){
-  state.memories.push({text,ts:Date.now(),type});
+  state.memories.push({text,ts:ENV.nowMs(),type});
   if(state.memories.length>60)state.memories.shift();
 }
 
@@ -995,8 +1064,10 @@ function namePrefix(){
 //  §15  RESPONSE ENGINE  ·  Core dispatch
 // ─────────────────────────────────────────────────────────────────────
 function generateResponse(userText){
+  const correlationId=ENV.makeId('resp');
+  const startedAt=ENV.nowMs();
   const text=userText.trim(),t=text.toLowerCase();
-  trace('input',{len:text.length,sample:t.slice(0,80)});
+  trace('input',{correlation_id:correlationId,step_name:'input_received',len:text.length,sample:t.slice(0,80)});
   _aiCtx=kiraAI.process(text);
   const regexMood=detectUserMoodRegex(text);
   const regexIdx=MOOD_LABELS.indexOf(regexMood);
@@ -1004,7 +1075,7 @@ function generateResponse(userText){
   const userMood=_aiCtx.confidence>0.38?_aiCtx.mood:regexMood;
   const topics=detectTopics(text);
   const info=extractPersonalInfo(text);
-  trace('analysis',{regexMood,userMood:_aiCtx.mood,conf:+_aiCtx.confidence.toFixed(3),topics});
+  trace('analysis',{correlation_id:correlationId,step_name:'analysis_complete',regexMood,userMood:_aiCtx.mood,conf:+_aiCtx.confidence.toFixed(3),topics});
   const tod=getTimeOfDay();
   updateHerMood(userMood);
   CTX.mood=userMood;advanceCTX();
@@ -1017,15 +1088,15 @@ function generateResponse(userText){
   addAffection(affGain);
 
   // ── Continuation: did user reply to a question Kira just asked? ──
-  if(isContinuation(t)){setRoute('continuation');return handleContinuation(text,userMood);}
+  if(isContinuation(t)){setRoute('continuation');const out=handleContinuation(text,userMood);logTransition(correlationId,'route_continuation',startedAt,{route:DIAG.lastRoute,response_length:out.length});return out;}
 
-  if(info&&info.type==='name'){setRoute('name-detected');return kiraAI.rank([
+  if(info&&info.type==='name'){setRoute('name-detected');const out=kiraAI.rank([
     `${info.value}... I like that. It suits you.${maybeEmoji()}`,
     `${info.value}. I'll keep that.${maybeEmoji()} Nice to finally know what to call you.`,
     `So you're ${info.value}. Good. I was getting tired of "hey you."${maybeEmoji()}`,
     `${info.value}${maybeEmoji()} That's a good name. Feels right, somehow.`,
     `${info.value}.${maybeEmoji()} Let me say it again — ${info.value}. Yeah. That lands.`
-  ],_aiCtx.ctxVec);}
+  ],_aiCtx.ctxVec);logTransition(correlationId,'route_name_detected',startedAt,{route:DIAG.lastRoute,response_length:out.length});return out;}
 
   if(/^(hey|hi|hello|yo|sup|what'?s up|howdy|hiya|heya|greetings|good (?:morning|afternoon|evening|night))[\s!?.]*$/i.test(t)||
     (t.length<=5&&/^(hey|hi|yo|sup)$/.test(t.replace(/[^a-z]/g,''))))
@@ -1091,7 +1162,9 @@ function generateResponse(userText){
   if(userMood==='grateful')
     {setCTX('grateful',null,null);setRoute('grateful');return handleGrateful();}
   setRoute('general');
-  return handleGeneral(text,userMood,tod);
+  const response=handleGeneral(text,userMood,tod);
+  logTransition(correlationId,'route_general',startedAt,{route:DIAG.lastRoute,response_length:response.length});
+  return response;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1810,7 +1883,7 @@ function processImageFile(file,cb){
 
 // ── Chat image message ──
 function addImageMessage(role,imgId,ts,skipSave){
-  const now=ts||Date.now();addDateSeparator(now);
+  const now=ts||ENV.nowMs();addDateSeparator(now);
   const group=document.createElement('div');group.className=`msg-group ${role}`;
   if(!ts)group.style.animation='';
   const bubble=document.createElement('div');bubble.className='bubble bubble-img';
@@ -1842,7 +1915,7 @@ imgFileInput.addEventListener('change',(e)=>{
   processImageFile(file,(dataURL)=>{
     const id=storeImage(dataURL);
     addImageMessage('you',id);
-    state.messagesSent++;state.lastMessageTime=Date.now();
+    state.messagesSent++;state.lastMessageTime=ENV.nowMs();
     // Kira reacts to image
     const thinkTime=randInt(700,1400);
     showTyping();
@@ -1855,7 +1928,7 @@ imgFileInput.addEventListener('change',(e)=>{
         `You sent me a picture.${maybeEmoji()} That feels personal. Thank you for sharing that with me.`,
         `I love that you showed me this.${maybeEmoji()} What should I know about it?`
       ];
-      addMessage('her',pick(reactions));state.conversationCount++;saveState();saveAI();
+      addMessage('her',pick(reactions));state.conversationCount++;persistAtomically('image_reaction_upload');
     },thinkTime);
   });
   imgFileInput.value='';
@@ -1871,7 +1944,7 @@ msgInput.addEventListener('paste',(e)=>{
       processImageFile(file,(dataURL)=>{
         const id=storeImage(dataURL);
         addImageMessage('you',id);
-        state.messagesSent++;state.lastMessageTime=Date.now();
+        state.messagesSent++;state.lastMessageTime=ENV.nowMs();
         showTyping();
         setTimeout(()=>{
           hideTyping();
@@ -1881,7 +1954,7 @@ msgInput.addEventListener('paste',(e)=>{
             `You pasted something for me.${maybeEmoji()} I'm intrigued — what am I looking at?`,
             `${getName()||'Hey'}...${maybeEmoji()} I see it. Tell me the story.`
           ];
-          addMessage('her',pick(r));state.conversationCount++;saveState();saveAI();
+          addMessage('her',pick(r));state.conversationCount++;persistAtomically('image_reaction_paste');
         },randInt(600,1200));
       });
       return;
@@ -1912,7 +1985,7 @@ function addSystemMessage(text){
 }
 
 function addMessage(role,text,ts,skipSave){
-  const now=ts||Date.now();addDateSeparator(now);
+  const now=ts||ENV.nowMs();addDateSeparator(now);
   const group=document.createElement('div');group.className=`msg-group ${role}`;
   const bubble=document.createElement('div');bubble.className='bubble';bubble.textContent=text;
   group.appendChild(bubble);
@@ -1944,10 +2017,12 @@ function flashLearning(){
 //  §19  SEND + ONLINE LEARNING LOOP
 // ─────────────────────────────────────────────────────────────────────
 function sendMessage(){
+  const correlationId=ENV.makeId('msg');
+  const startedAt=ENV.nowMs();
   const text=msgInput.value.trim();if(!text)return;
   if(text.length>INPUT_SOFT_LIMIT){
     addSystemMessage(`Message too long (${text.length}/${INPUT_SOFT_LIMIT}). Please shorten it for better responses.`);
-    trace('validation',{reason:'too-long',len:text.length},'warn');
+    logTransition(correlationId,'validate_input',startedAt,{reason:'too-long',len:text.length},'warn');
     return;
   }
   // Online feedback: detect engagement signal from this message
@@ -1956,11 +2031,13 @@ function sendMessage(){
   const regexIdx=MOOD_LABELS.indexOf(regexMoodNow);
   kiraAI.feedback(signal,regexIdx);
   if(signal!==0)flashLearning();
+  logTransition(correlationId,'feedback_analyzed',startedAt,{signal,regex_mood:regexMoodNow});
 
   msgInput.value='';msgInput.style.height='auto';updateSendBtn();
-  addMessage('you',text);state.messagesSent++;state.lastMessageTime=Date.now();
+  addMessage('you',text,true);state.messagesSent++;state.lastMessageTime=ENV.nowMs();
+  logTransition(correlationId,'user_message_persisted',startedAt,{messages_sent:state.messagesSent});
 
-  _seed=Date.now()^(state.messagesSent*2654435761);rng=mulberry32(_seed);
+  _seed=(ENV.nowMs()^(state.messagesSent*2654435761))>>>0;rng=mulberry32(_seed);
 
   const thinkTime=Math.min(400+text.length*8+randInt(200,800),3000);
   showTyping();
@@ -1969,7 +2046,7 @@ function sendMessage(){
     try{
       hideTyping();
       const response=generateResponse(text);
-      trace('response',{route:DIAG.lastRoute,len:response.length});
+      logTransition(correlationId,'response_generated',startedAt,{route:DIAG.lastRoute,len:response.length});
       // Split longer responses occasionally
       if(response.length>120&&chance(0.22)){
         const sentences=response.match(/[^.!?]+[.!?]+/g)||[response];
@@ -1979,18 +2056,19 @@ function sendMessage(){
           const p2=sentences.slice(mid).join('').trim();
           if(p2.length>0){
             addMessage('her',p1);state.messagesReceived++;showTyping();
-            setTimeout(()=>{hideTyping();addMessage('her',p2);state.conversationCount++;saveState();saveAI();},randInt(600,1500));
+            setTimeout(()=>{hideTyping();addMessage('her',p2);state.conversationCount++;persistAtomically('send_message_split');logTransition(correlationId,'response_split_persisted',startedAt,{conversation_count:state.conversationCount});},randInt(600,1500));
             return;
           }
         }
       }
-      addMessage('her',response);state.conversationCount++;saveState();saveAI();
+      addMessage('her',response);state.conversationCount++;persistAtomically('send_message_single');
+      logTransition(correlationId,'response_persisted',startedAt,{conversation_count:state.conversationCount});
     }catch(err){
       hideTyping();
       DIAG.errors++;
-      trace('error',{scope:'sendMessage',message:String(err&&err.message||err)},'error');
+      logTransition(correlationId,'send_message_error',startedAt,{scope:'sendMessage',message:String(err&&err.message||err)},'error');
       addMessage('her',`I tripped over my thoughts for a second. Could you try that again? ${maybeEmoji()}`);
-      saveState();saveAI();
+      persistAtomically('send_message_error_recovery');
     }
   },thinkTime);
 }
@@ -2111,13 +2189,14 @@ settingsOverlay.addEventListener('click',(e)=>{if(e.target===settingsOverlay)set
 // ─────────────────────────────────────────────────────────────────────
 function boot(){
   trace('boot','start');
+  recoverIncompleteTx();
   loadState();loadAI();loadImages();loadProfilePic();
   applyProfilePic();
 
   // Streak tracking
-  const now=new Date(),lastDate=state.lastVisit?new Date(state.lastVisit).toDateString():null,today=now.toDateString();
+  const now=ENV.nowDate(),lastDate=state.lastVisit?new Date(state.lastVisit).toDateString():null,today=now.toDateString();
   if(lastDate!==today){
-    const yesterday=new Date(now-86400000).toDateString();
+    const yesterday=new Date(now.getTime()-86400000).toDateString();
     state.currentStreak=lastDate===yesterday?state.currentStreak+1:1;
     if(state.currentStreak>state.longestStreak)state.longestStreak=state.currentStreak;
   }
@@ -2130,8 +2209,8 @@ function boot(){
     showTyping();
     setTimeout(()=>{
       hideTyping();addMessage('her',initialMsg);
-      state.lastVisit=Date.now();state.lastGreeting=Date.now();
-      saveState();saveAI();
+      state.lastVisit=ENV.nowMs();state.lastGreeting=ENV.nowMs();
+      persistAtomically('boot_initial_message');
     },randInt(800,1500));
   },delay);
   updateAffectionUI();updateSendBtn();msgInput.focus();
