@@ -152,7 +152,7 @@
 - Introduce two-phase local persistence boundary `persistAtomically(reason)` for state+AI snapshots.
 - Add transaction recovery hook `recoverIncompleteTx()` in boot prelude.
 - Add structured transition logging (`correlation_id`, `step_name`, `latency_ms`) for send and response chains.
-- Route all save facades (`saveState`, `saveAI`) through transactional persistence boundary.
+- Route all save façades (`saveState`, `saveAI`) through transactional persistence boundary.
 - Replace image ID random source with deterministic `ENV.makeId('img')`.
 - Ensure all high-volume arrays remain capped at transition boundaries (`chatHistory`, `memories`, `userMoods`).
 
