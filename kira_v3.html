@@ -83,6 +83,9 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
   resize:none;max-height:120px;padding:8px 0;scrollbar-width:none}
 #msg-input::placeholder{color:var(--text-muted)}
 #msg-input::-webkit-scrollbar{display:none}
+#input-meta{display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding:0 4px;font-size:11px;color:var(--text-muted);font-family:'Quicksand',sans-serif}
+#input-count.warn{color:var(--accent-warm)}
+#input-count.limit{color:#d46060;font-weight:700}
 #send-btn{width:40px;height:40px;border-radius:50%;border:none;
   background:linear-gradient(135deg,var(--accent-rose),var(--accent-rose-soft));
   color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;
@@ -211,6 +214,10 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
       <input type="file" id="img-file-input" accept="image/*">
       <textarea id="msg-input" rows="1" placeholder="Say something..." autocomplete="off"></textarea>
       <button id="send-btn"><svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
+    </div>
+    <div id="input-meta">
+      <span id="input-count">0 / 300</span>
+      <span id="input-hint">Enter to send · Shift+Enter for newline</span>
     </div>
   </div>
 </div>
@@ -622,6 +629,29 @@ const CTX={
   mood:null         // last user mood
 };
 
+const DIAG={
+  traceEnabled:true,
+  traces:[],
+  errors:0,
+  lastRoute:'boot'
+};
+
+function trace(step,data,level='info'){
+  if(!DIAG.traceEnabled&&level!=='error')return;
+  DIAG.traces.push({ts:Date.now(),step,level,data});
+  if(DIAG.traces.length>40)DIAG.traces.shift();
+}
+
+function setRoute(route){
+  DIAG.lastRoute=route;
+  trace('route',route);
+}
+
+function summarizeTrace(){
+  if(!DIAG.traces.length)return'none';
+  return DIAG.traces.slice(-4).map(t=>`${t.step}:${typeof t.data==='string'?t.data:JSON.stringify(t.data)}`).join(' | ');
+}
+
 function setCTX(handler,topic,question){
   CTX.handler=handler;CTX.topic=topic||CTX.topic;
   CTX.pendingQ=question||null;CTX.turnsSince=0;CTX.depth++;
@@ -664,6 +694,7 @@ function handleContinuation(text,userMood){
 //  §9  PRNG + TIME + STORAGE
 // ─────────────────────────────────────────────────────────────────────
 const STORE_KEY='kira_state_v3',AI_KEY='kira_ai_v3',IMG_KEY='kira_images_v3',PIC_KEY='kira_profilepic_v3';
+const INPUT_SOFT_LIMIT=300;
 
 // ── Image store: images are kept out of DOM innerHTML entirely ──
 // Each image is referenced by an opaque ID; the base64 data lives only
@@ -965,6 +996,7 @@ function namePrefix(){
 // ─────────────────────────────────────────────────────────────────────
 function generateResponse(userText){
   const text=userText.trim(),t=text.toLowerCase();
+  trace('input',{len:text.length,sample:t.slice(0,80)});
   _aiCtx=kiraAI.process(text);
   const regexMood=detectUserMoodRegex(text);
   const regexIdx=MOOD_LABELS.indexOf(regexMood);
@@ -972,6 +1004,7 @@ function generateResponse(userText){
   const userMood=_aiCtx.confidence>0.38?_aiCtx.mood:regexMood;
   const topics=detectTopics(text);
   const info=extractPersonalInfo(text);
+  trace('analysis',{regexMood,userMood:_aiCtx.mood,conf:+_aiCtx.confidence.toFixed(3),topics});
   const tod=getTimeOfDay();
   updateHerMood(userMood);
   CTX.mood=userMood;advanceCTX();
@@ -984,79 +1017,80 @@ function generateResponse(userText){
   addAffection(affGain);
 
   // ── Continuation: did user reply to a question Kira just asked? ──
-  if(isContinuation(t))return handleContinuation(text,userMood);
+  if(isContinuation(t)){setRoute('continuation');return handleContinuation(text,userMood);}
 
-  if(info&&info.type==='name')return kiraAI.rank([
+  if(info&&info.type==='name'){setRoute('name-detected');return kiraAI.rank([
     `${info.value}... I like that. It suits you.${maybeEmoji()}`,
     `${info.value}. I'll keep that.${maybeEmoji()} Nice to finally know what to call you.`,
     `So you're ${info.value}. Good. I was getting tired of "hey you."${maybeEmoji()}`,
     `${info.value}${maybeEmoji()} That's a good name. Feels right, somehow.`,
     `${info.value}.${maybeEmoji()} Let me say it again — ${info.value}. Yeah. That lands.`
-  ],_aiCtx.ctxVec);
+  ],_aiCtx.ctxVec);}
 
   if(/^(hey|hi|hello|yo|sup|what'?s up|howdy|hiya|heya|greetings|good (?:morning|afternoon|evening|night))[\s!?.]*$/i.test(t)||
     (t.length<=5&&/^(hey|hi|yo|sup)$/.test(t.replace(/[^a-z]/g,''))))
-    {setCTX('greeting',null,'How are you doing?');return handleGreeting(tod);}
+    {setCTX('greeting',null,'How are you doing?');setRoute('greeting');return handleGreeting(tod);}
 
   if(/^(?:how (?:are you|r u|you doing|have you been)|what'?s up|wyd|what are you (?:up to|doing))[\s?!]*$/i.test(t))
-    {setCTX('how-are-you',null,'How are things with you?');return handleHowAreYou(tod);}
+    {setCTX('how-are-you',null,'How are things with you?');setRoute('how-are-you');return handleHowAreYou(tod);}
 
   if(/(?:what(?:'s| is) your (?:name|favorite|fav)|tell me about (?:you|yourself)|who are you|what do you (?:like|enjoy|do))/i.test(t))
-    return handleAboutHer(t);
+    {setRoute('about-her');return handleAboutHer(t);}
 
   // ── Enriched dispatch ─────────────────────────────────────────────
   // "What's on your mind / what are you thinking"
   if(/what(?:'s| is)(?: on)? (?:your )?mind|what(?:'re| are) you thinking(?: about)?|penny for your thoughts/i.test(t))
-    return handleWhatOnMind();
+    {setRoute('on-your-mind');return handleWhatOnMind();}
 
   // "surprise me / random fact / tell me something interesting"
   if(/surprise me|random fact|something interesting|tell me something (new|fun|weird|cool|random)/i.test(t))
-    return handleSurpriseMe();
+    {setRoute('surprise-me');return handleSurpriseMe();}
 
   // "I need advice / what should I do"
   if(/(?:i need|give me|can i get|need your) (?:advice|your opinion|help|guidance)|what should i do|don'?t know what to do/i.test(t))
-    return handleAdviceRequest(text);
+    {setRoute('advice');return handleAdviceRequest(text);}
 
   // "what if" hypotheticals
   if(/^what if\b|hypothetically|let'?s say|imagine if/i.test(t))
-    return handleHypothetical(text);
+    {setRoute('hypothetical');return handleHypothetical(text);}
 
   // Good news
   if(/(?:i got|i passed|i got (?:the|a)|just found out|guess what|exciting news|great news|i'm (?:so )?(?:happy|excited|pumped)|it happened)/i.test(t)&&userMood==='happy')
-    return handleGoodNews(text);
+    {setRoute('good-news');return handleGoodNews(text);}
 
   // "something happened / I did something today"
   if(/(?:so (?:today|yesterday|last night|just now)|something happened|you won'?t believe|guess what happened|i (?:just|finally|actually))/i.test(t)&&userMood!=='sad'&&userMood!=='anxious')
-    return handleSomethingHappened(text);
+    {setRoute('something-happened');return handleSomethingHappened(text);}
 
-  if(/\bi (?:love|luv|luh) (?:you|u)\b/i.test(t))return handleILoveYou();
-  if(/\bi miss (?:you|u)\b/i.test(t))return handleIMissYou();
+  if(/\bi (?:love|luv|luh) (?:you|u)\b/i.test(t)){setRoute('i-love-you');return handleILoveYou();}
+  if(/\bi miss (?:you|u)\b/i.test(t)){setRoute('i-miss-you');return handleIMissYou();}
   if(/\b(?:good ?night|gn|nighty?|sleep well|i'?m (?:going to|gonna) (?:bed|sleep)|bye|goodbye|ttyl|gotta go|heading out|talk later|see ya)\b/i.test(t))
-    return handleGoodbye(t);
+    {setRoute('goodbye');return handleGoodbye(t);}
   if(/\b(?:you(?:'re| are) (?:so |really |very )?(?:cute|beautiful|pretty|gorgeous|amazing|wonderful|sweet|perfect|incredible|the best|kind)|i (?:like|appreciate|adore) you)\b/i.test(t))
-    return handleCompliment();
+    {setRoute('compliment');return handleCompliment();}
   if(userMood==='sad'||userMood==='anxious'||userMood==='vulnerable')
-    {setCTX('feels-bad',null,'Tell me more about what you\'re going through.');return handleUserFeelsBad(userMood,text);}
+    {setCTX('feels-bad',null,'Tell me more about what you\'re going through.');setRoute('feels-bad');return handleUserFeelsBad(userMood,text);}
   if(userMood==='angry')
-    {setCTX('angry',null,'What happened?');return handleUserAngry();}
+    {setCTX('angry',null,'What happened?');setRoute('angry');return handleUserAngry();}
   if(userMood==='tired')
-    {setCTX('tired',null,'When did you last really rest?');return handleUserTired(tod);}
+    {setCTX('tired',null,'When did you last really rest?');setRoute('tired');return handleUserTired(tod);}
   if(userMood==='flirty')
-    {setCTX('flirt',null,null);return handleFlirt();}
+    {setCTX('flirt',null,null);setRoute('flirt');return handleFlirt();}
   if(userMood==='bored')
-    {setCTX('bored',null,'What\'s a memory that makes you smile?');return handleBored();}
+    {setCTX('bored',null,'What\'s a memory that makes you smile?');setRoute('bored');return handleBored();}
   if(/\b(?:what do you think|your (?:opinion|thoughts?|take)|do you (?:think|believe|like)|how do you feel)\b/i.test(t))
-    {setCTX('opinion',topics[0]||null,'What\'s your take on that?');return handleOpinionQuestion(text,topics);}
+    {setCTX('opinion',topics[0]||null,'What\'s your take on that?');setRoute('opinion');return handleOpinionQuestion(text,topics);}
   if(t.endsWith('?')||/^(?:what|who|where|when|why|how|is |are |do |does |can |could |would |should |will )/i.test(t))
-    {setCTX('question',topics[0]||null,null);return handleQuestion(text,topics);}
+    {setCTX('question',topics[0]||null,null);setRoute('question');return handleQuestion(text,topics);}
   // Brief "I'm good/fine/okay/tired/stressed" status updates
   if(text.length<40&&/^(?:i'?m |i am |feeling )?(good|great|fine|okay|ok|alright|not bad|terrible|awful|stressed|meh|pretty good|kinda (?:good|bad|tired|stressed)|not great)/i.test(t))
-    return handleImFine(text);
+    {setRoute('status-update');return handleImFine(text);}
 
   if(topics.length>0)
-    {setCTX('topic',topics[0],null);return handleTopicResponse(topics,userMood);}
+    {setCTX('topic',topics[0],null);setRoute('topic');return handleTopicResponse(topics,userMood);}
   if(userMood==='grateful')
-    {setCTX('grateful',null,null);return handleGrateful();}
+    {setCTX('grateful',null,null);setRoute('grateful');return handleGrateful();}
+  setRoute('general');
   return handleGeneral(text,userMood,tod);
 }
 
@@ -1911,6 +1945,11 @@ function flashLearning(){
 // ─────────────────────────────────────────────────────────────────────
 function sendMessage(){
   const text=msgInput.value.trim();if(!text)return;
+  if(text.length>INPUT_SOFT_LIMIT){
+    addSystemMessage(`Message too long (${text.length}/${INPUT_SOFT_LIMIT}). Please shorten it for better responses.`);
+    trace('validation',{reason:'too-long',len:text.length},'warn');
+    return;
+  }
   // Online feedback: detect engagement signal from this message
   const signal=detectFeedback(text);
   const regexMoodNow=detectUserMoodRegex(text);
@@ -1927,27 +1966,50 @@ function sendMessage(){
   showTyping();
 
   setTimeout(()=>{
-    hideTyping();
-    const response=generateResponse(text);
-    // Split longer responses occasionally
-    if(response.length>120&&chance(0.22)){
-      const sentences=response.match(/[^.!?]+[.!?]+/g)||[response];
-      if(sentences.length>=2){
-        const mid=Math.ceil(sentences.length/2);
-        const p1=sentences.slice(0,mid).join('').trim();
-        const p2=sentences.slice(mid).join('').trim();
-        if(p2.length>0){
-          addMessage('her',p1);state.messagesReceived++;showTyping();
-          setTimeout(()=>{hideTyping();addMessage('her',p2);state.conversationCount++;saveState();saveAI();},randInt(600,1500));
-          return;
+    try{
+      hideTyping();
+      const response=generateResponse(text);
+      trace('response',{route:DIAG.lastRoute,len:response.length});
+      // Split longer responses occasionally
+      if(response.length>120&&chance(0.22)){
+        const sentences=response.match(/[^.!?]+[.!?]+/g)||[response];
+        if(sentences.length>=2){
+          const mid=Math.ceil(sentences.length/2);
+          const p1=sentences.slice(0,mid).join('').trim();
+          const p2=sentences.slice(mid).join('').trim();
+          if(p2.length>0){
+            addMessage('her',p1);state.messagesReceived++;showTyping();
+            setTimeout(()=>{hideTyping();addMessage('her',p2);state.conversationCount++;saveState();saveAI();},randInt(600,1500));
+            return;
+          }
         }
       }
+      addMessage('her',response);state.conversationCount++;saveState();saveAI();
+    }catch(err){
+      hideTyping();
+      DIAG.errors++;
+      trace('error',{scope:'sendMessage',message:String(err&&err.message||err)},'error');
+      addMessage('her',`I tripped over my thoughts for a second. Could you try that again? ${maybeEmoji()}`);
+      saveState();saveAI();
     }
-    addMessage('her',response);state.conversationCount++;saveState();saveAI();
   },thinkTime);
 }
 
-function updateSendBtn(){sendBtn.classList.toggle('active',msgInput.value.trim().length>0);}
+function updateInputMeta(){
+  const countEl=document.getElementById('input-count');
+  const len=msgInput.value.trim().length;
+  if(countEl){
+    countEl.textContent=`${len} / ${INPUT_SOFT_LIMIT}`;
+    countEl.classList.toggle('warn',len>INPUT_SOFT_LIMIT*0.8&&len<=INPUT_SOFT_LIMIT);
+    countEl.classList.toggle('limit',len>INPUT_SOFT_LIMIT);
+  }
+}
+
+function updateSendBtn(){
+  const len=msgInput.value.trim().length;
+  sendBtn.classList.toggle('active',len>0&&len<=INPUT_SOFT_LIMIT);
+  updateInputMeta();
+}
 
 msgInput.addEventListener('input',()=>{
   msgInput.style.height='auto';
@@ -2005,7 +2067,9 @@ function renderAIStats(){
     `<b>Attention</b>: Scaled dot-product, ${kiraAI.memory.K.length}/${MEM_CAP} slots<br>`+
     `<b>Messages processed</b>: ${kiraAI.tick}<br>`+
     `<b>Mood net updates</b>: ${kiraAI.moodNet.updates}<br>`+
-    `<b>Scorer updates</b>: ${kiraAI.scorer.updates}`;
+    `<b>Scorer updates</b>: ${kiraAI.scorer.updates}<br>`+
+    `<b>Diagnostics</b>: errors ${DIAG.errors}, route ${DIAG.lastRoute}<br>`+
+    `<b>Trace tail</b>: ${summarizeTrace()}`;
 }
 
 function renderPersonalityChips(){
@@ -2046,6 +2110,7 @@ settingsOverlay.addEventListener('click',(e)=>{if(e.target===settingsOverlay)set
 //  §22  BOOT
 // ─────────────────────────────────────────────────────────────────────
 function boot(){
+  trace('boot','start');
   loadState();loadAI();loadImages();loadProfilePic();
   applyProfilePic();
 
@@ -2069,7 +2134,7 @@ function boot(){
       saveState();saveAI();
     },randInt(800,1500));
   },delay);
-  updateAffectionUI();msgInput.focus();
+  updateAffectionUI();updateSendBtn();msgInput.focus();
 }
 
 boot();
